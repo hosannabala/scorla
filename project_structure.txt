@@ -1,0 +1,876 @@
+PROJECT STRUCTURE: /workspaces/scorla/src
+================================================================================
+
+DIRECTORY TREE:
+--------------------------------------------------------------------------------
+src/
+  providers/
+    Web3Provider.js
+  contracts/
+    MockERC20.abi.json
+    ScorlaStrategy.abi.json
+  hooks/
+    useScorlaStrategy.js
+  app/
+    favicon.ico
+    globals.css
+    layout.js
+    layout.js.backup
+    page.js
+    dashboard/
+      page.js
+      components/
+        DepositModal.js
+        Header.js
+        ImpactChart.js
+        StatCard.js
+        WithdrawModal.js
+
+================================================================================
+
+FILE CONTENTS:
+--------------------------------------------------------------------------------
+
+
+================================================================================
+FILE: providers/Web3Provider.js
+================================================================================
+'use client';
+
+import '@rainbow-me/rainbowkit/styles.css';
+import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
+import { WagmiProvider } from 'wagmi';
+import { baseSepolia } from 'wagmi/chains';
+import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+
+const config = getDefaultConfig({
+  appName: 'Scorla',
+  projectId: 'temp',
+  chains: [baseSepolia],
+  ssr: true,
+});
+
+const queryClient = new QueryClient();
+
+export function Web3Provider({ children }) {
+  return (
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider>
+          {children}
+        </RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
+  );
+}
+
+
+================================================================================
+FILE: contracts/MockERC20.abi.json
+================================================================================
+[
+  {
+    "inputs": [{"internalType": "address","name": "account","type": "address"}],
+    "name": "balanceOf",
+    "outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "address","name": "spender","type": "address"},{"internalType": "uint256","name": "amount","type": "uint256"}],
+    "name": "approve",
+    "outputs": [{"internalType": "bool","name": "","type": "bool"}],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{"internalType": "uint8","name": "","type": "uint8"}],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
+
+
+================================================================================
+FILE: contracts/ScorlaStrategy.abi.json
+================================================================================
+[
+  {
+    "inputs": [{"internalType": "address","name": "owner","type": "address"}],
+    "name": "balanceOf",
+    "outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalAssets",
+    "outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getEducationSplitPercentage",
+    "outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "uint256","name": "assets","type": "uint256"},{"internalType": "address","name": "receiver","type": "address"}],
+    "name": "deposit",
+    "outputs": [{"internalType": "uint256","name": "shares","type": "uint256"}],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{"internalType": "uint256","name": "assets","type": "uint256"},{"internalType": "address","name": "receiver","type": "address"},{"internalType": "address","name": "owner","type": "address"}],
+    "name": "withdraw",
+    "outputs": [{"internalType": "uint256","name": "shares","type": "uint256"}],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
+
+
+================================================================================
+FILE: hooks/useScorlaStrategy.js
+================================================================================
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { parseUnits, formatUnits } from 'viem';
+import ScorlaStrategyABI from '@/contracts/ScorlaStrategy.abi.json';
+import MockERC20ABI from '@/contracts/MockERC20.abi.json';
+
+const STRATEGY_ADDRESS = process.env.NEXT_PUBLIC_STRATEGY_ADDRESS;
+const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS;
+
+export function useScorlaStrategy() {
+  const { address } = useAccount();
+  const { writeContract, data: hash, isPending } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  // Read user's USDC balance
+  const { data: usdcBalance } = useReadContract({
+    address: USDC_ADDRESS,
+    abi: MockERC20ABI,
+    functionName: 'balanceOf',
+    args: [address],
+    enabled: !!address,
+  });
+
+  // Read user's strategy shares
+  const { data: strategyShares } = useReadContract({
+    address: STRATEGY_ADDRESS,
+    abi: ScorlaStrategyABI,
+    functionName: 'balanceOf',
+    args: [address],
+    enabled: !!address,
+  });
+
+  // Read education split percentage
+  const { data: educationSplit } = useReadContract({
+    address: STRATEGY_ADDRESS,
+    abi: ScorlaStrategyABI,
+    functionName: 'getEducationSplitPercentage',
+  });
+
+  // Read total strategy assets
+  const { data: totalAssets } = useReadContract({
+    address: STRATEGY_ADDRESS,
+    abi: ScorlaStrategyABI,
+    functionName: 'totalAssets',
+  });
+
+  // Approve USDC
+  const approveUSDC = async (amount) => {
+    writeContract({
+      address: USDC_ADDRESS,
+      abi: MockERC20ABI,
+      functionName: 'approve',
+      args: [STRATEGY_ADDRESS, parseUnits(amount.toString(), 6)],
+    });
+  };
+
+  // Deposit to strategy
+  const deposit = async (amount) => {
+    writeContract({
+      address: STRATEGY_ADDRESS,
+      abi: ScorlaStrategyABI,
+      functionName: 'deposit',
+      args: [parseUnits(amount.toString(), 6), address],
+    });
+  };
+
+  // Withdraw from strategy
+  const withdraw = async (amount) => {
+    writeContract({
+      address: STRATEGY_ADDRESS,
+      abi: ScorlaStrategyABI,
+      functionName: 'withdraw',
+      args: [parseUnits(amount.toString(), 6), address, address],
+    });
+  };
+
+  return {
+    // Balances
+    usdcBalance: usdcBalance ? formatUnits(usdcBalance, 6) : '0',
+    strategyShares: strategyShares ? formatUnits(strategyShares, 18) : '0',
+    totalAssets: totalAssets ? formatUnits(totalAssets, 6) : '0',
+    educationSplit: educationSplit ? Number(educationSplit) : 20,
+    
+    // Actions
+    approveUSDC,
+    deposit,
+    withdraw,
+    
+    // Status
+    isPending,
+    isConfirming,
+    isSuccess,
+  };
+}
+
+
+================================================================================
+FILE: app/favicon.ico
+================================================================================
+[Binary file - content not displayed]
+
+================================================================================
+FILE: app/globals.css
+================================================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+
+================================================================================
+FILE: app/layout.js
+================================================================================
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { Web3Provider } from "@/providers/Web3Provider";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata = {
+  title: "Scorla",
+  description: "Turn idle crypto into an engine for education.",
+};
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body className={`${inter.className} bg-black text-white antialiased`}>
+        <Web3Provider>
+          {children}
+        </Web3Provider>
+      </body>
+    </html>
+  );
+}
+
+
+================================================================================
+FILE: app/layout.js.backup
+================================================================================
+import { Inter } from "next/font/google";
+import "./globals.css";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata = {
+  title: "Scorla",
+  description: "Turn idle crypto into an engine for education.",
+};
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body className={`${inter.className} bg-black text-white antialiased`}>{children}</body>
+    </html>
+  );
+}
+
+
+================================================================================
+FILE: app/page.js
+================================================================================
+import Link from 'next/link';
+import { ArrowRight, Zap, Target, DollarSign } from 'lucide-react';
+
+export default function LandingPage() {
+  return (
+    <div className="min-h-screen bg-black text-white">
+      {/* Header */}
+      <header className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <nav className="flex justify-between items-center">
+          <h1 className="text-3xl font-bold">Scorla</h1>
+          <Link href="/dashboard" legacyBehavior>
+            <a className="bg-white text-black font-semibold py-2 px-6 rounded-lg hover:bg-gray-200 transition-colors duration-300">
+              Launch App
+            </a>
+          </Link>
+        </nav>
+      </header>
+
+      <main>
+        {/* Hero Section */}
+        <section className="text-center pt-20 pb-32 px-4">
+          <h2 className="text-5xl md:text-7xl font-bold max-w-4xl mx-auto">
+            Turn Idle Crypto Into an Engine for Education.
+          </h2>
+          <p className="text-lg md:text-xl text-gray-400 mt-6 max-w-2xl mx-auto">
+            Scorla lets you earn competitive DeFi yield on your assets while automatically funding scholarships and public learning initiatives.
+          </p>
+          <p className="text-xl md:text-2xl font-semibold mt-6">
+            Profit with purpose.
+          </p>
+          <Link href="/dashboard" legacyBehavior>
+            <a className="mt-10 inline-flex items-center justify-center bg-white text-black font-bold py-4 px-8 rounded-lg text-lg hover:bg-gray-200 transition-colors duration-300">
+              Start Your Impact
+              <ArrowRight className="ml-2 w-6 h-6" />
+            </a>
+          </Link>
+        </section>
+
+        {/* DESIGN FIX: Changed bg-gray-900 to a border style */}
+        <section className="py-20 bg-black border-t border-b border-gray-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <h3 className="text-4xl font-bold text-center mb-16">How Scorla Works</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center mx-auto mb-4">
+                  <DollarSign className="w-8 h-8" />
+                </div>
+                <h4 className="text-2xl font-semibold mb-2">1. Deposit & Earn</h4>
+                <p className="text-gray-400">
+                  You deposit stablecoins (like USDC) into a secure, high-yield vault powered by Octant's proven ERC-4626 standard.
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Zap className="w-8 h-8" />
+                </div>
+                <h4 className="text-2xl font-semibold mb-2">2. Split the Yield</h4>
+                <p className="text-gray-400">
+                  Scorla's smart contract automatically splits the generated yield. A portion goes back to you, and a portion goes to the education fund.
+                </p>
+              </div>
+              <div className="text-center">
+                <div className="w-16 h-16 bg-white text-black rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Target className="w-8 h-8" />
+                </div>
+                <h4 className="text-2xl font-semibold mb-2">3. Fund Education</h4>
+                <p className="text-gray-400">
+                  The education portion is transparently sent to vetted learning DAOs and scholarship programs, creating a sustainable, on-chain impact.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Features Section */}
+        <section className="max-w-4xl mx-auto py-20 px-4">
+          <div className="text-center mb-16">
+            <h3 className="text-4xl font-bold">Finance That Fuels the Future</h3>
+            <p className="text-lg text-gray-400 mt-4">Scorla is built on transparency, security, and a single, powerful idea.</p>
+          </div>
+          <ul className="space-y-8">
+            <li>
+              <h4 className="text-2xl font-semibold">Profit with Purpose</h4>
+              <p className="text-gray-400 mt-2">Earn competitive returns. Make a difference. You no longer have to choose. Your principal investment is never touched or donated.</p>
+            </li>
+            <li>
+              <h4 className="text-2xl font-semibold">Radical Transparency</h4>
+              <p className="text-gray-400 mt-2">Track your total yield, your personal returns, and your exact contribution to education—all on-chain, all in real-time.</p>
+            </li>
+            <li>
+              <h4 className="text-2xl font-semibold">Secure by Design</h4>
+              <p className="text-gray-400 mt-2">Built on Octant's audited ERC-4626 vault standard, Scorla leverages battle-tested DeFi infrastructure to keep your funds secure.</p>
+            </li>
+          </ul>
+        </section>
+      </main>
+
+      {/* DESIGN FIX: Changed bg-gray-900 to border style */}
+      <footer className="bg-black border-t border-gray-800 text-center py-10">
+        <p className="text-gray-400">Built for the Octant DeFi Hackathon 2025</p>
+        <p className="text-2xl font-bold text-white mt-1">Scorla</p>
+      </footer>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: app/dashboard/page.js
+================================================================================
+'use client';
+
+import { useState } from 'react';
+import { useAccount } from 'wagmi';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import Header from './components/Header';
+import StatCard from './components/StatCard';
+import ImpactChart from './components/ImpactChart';
+import DepositModal from './components/DepositModal';
+import WithdrawModal from './components/WithdrawModal';
+import { useScorlaStrategy } from '@/hooks/useScorlaStrategy';
+
+export default function Dashboard() {
+  const { isConnected, address } = useAccount();
+  const { usdcBalance, strategyShares, totalAssets, educationSplit } = useScorlaStrategy();
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black">
+      <Header />
+      
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {!isConnected ? (
+          <div className="text-center py-20">
+            <div className="inline-block mb-6">
+              <div className="w-20 h-20 mx-auto bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center animate-pulse">
+                <span className="text-4xl">🎓</span>
+              </div>
+            </div>
+            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent mb-4">
+              Turn Idle Crypto Into Education
+            </h1>
+            <p className="text-xl text-gray-300 mb-8 max-w-2xl mx-auto">
+              Every deposit helps fund scholarships. Watch your impact grow as you earn yield. 
+              <span className="block mt-2 text-purple-400 font-semibold">
+                Currently funding at {educationSplit}% - and it grows with every verified impact! 🚀
+              </span>
+            </p>
+            <div className="flex justify-center">
+              <ConnectButton.Custom>
+                {({ openConnectModal }) => (
+                  <button
+                    onClick={openConnectModal}
+                    className="px-8 py-4 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white text-lg font-bold rounded-xl shadow-2xl transform hover:scale-105 transition-all duration-200"
+                  >
+                    Connect Wallet & Start Your Impact 🌟
+                  </button>
+                )}
+              </ConnectButton.Custom>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+              <StatCard
+                title="Your Deposited Balance"
+                value={`$${parseFloat(strategyShares).toFixed(2)}`}
+                icon="💰"
+                subtitle="USDC in Strategy"
+              />
+              <StatCard
+                title="Total Vault Assets"
+                value={`$${parseFloat(totalAssets).toFixed(2)}`}
+                icon="🏦"
+                subtitle="Community Impact"
+              />
+              <StatCard
+                title="Scholarships Funded"
+                value="52"
+                icon="🎓"
+                subtitle="Lives Impacted"
+                highlight={true}
+              />
+              <StatCard
+                title="Education Donation Rate"
+                value={`${educationSplit}%`}
+                icon="📈"
+                subtitle="Growing with Impact"
+              />
+            </div>
+
+            <div className="flex gap-4 mb-8">
+              <button
+                onClick={() => setShowDepositModal(true)}
+                className="flex-1 px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-lg transform hover:scale-105 transition-all duration-200"
+              >
+                💎 Deposit Funds
+              </button>
+              <button
+                onClick={() => setShowWithdrawModal(true)}
+                className="flex-1 px-6 py-4 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-bold rounded-xl shadow-lg transform hover:scale-105 transition-all duration-200"
+              >
+                💸 Withdraw Funds
+              </button>
+            </div>
+
+            <div className="bg-gradient-to-r from-blue-900/50 to-purple-900/50 backdrop-blur-sm border border-blue-500/30 rounded-xl p-6 mb-8">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-400 text-sm mb-1">Your Wallet Balance</p>
+                  <p className="text-3xl font-bold text-white">${parseFloat(usdcBalance).toFixed(2)} USDC</p>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Address: {address?.slice(0, 6)}...{address?.slice(-4)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <div className="inline-block px-4 py-2 bg-green-500/20 border border-green-500/50 rounded-lg">
+                    <p className="text-green-400 text-sm font-semibold">✓ Base Sepolia</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-700 rounded-xl p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-white mb-2">My Impact</h2>
+                  <p className="text-gray-400">Yield Contributed to Education Over Time</p>
+                </div>
+              </div>
+              <ImpactChart />
+            </div>
+          </>
+        )}
+      </div>
+
+      {showDepositModal && <DepositModal onClose={() => setShowDepositModal(false)} />}
+      {showWithdrawModal && <WithdrawModal onClose={() => setShowWithdrawModal(false)} />}
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: app/dashboard/components/DepositModal.js
+================================================================================
+'use client';
+
+import { useState } from 'react';
+import { useScorlaStrategy } from '@/hooks/useScorlaStrategy';
+
+export default function DepositModal({ onClose }) {
+  const [amount, setAmount] = useState('');
+  const [step, setStep] = useState('input'); // input, approving, depositing, success
+  const { usdcBalance, approveUSDC, deposit, isPending, isConfirming, isSuccess } = useScorlaStrategy();
+
+  const handleApprove = async () => {
+    if (!amount || parseFloat(amount) <= 0) return;
+    setStep('approving');
+    await approveUSDC(amount);
+  };
+
+  const handleDeposit = async () => {
+    if (!amount || parseFloat(amount) <= 0) return;
+    setStep('depositing');
+    await deposit(amount);
+  };
+
+  // Auto-progress to success
+  if (isSuccess && step === 'depositing') {
+    setStep('success');
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-gradient-to-br from-gray-900 to-black border border-gray-700 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+        {step === 'input' && (
+          <>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold text-white">💎 Deposit USDC</h2>
+              <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">×</button>
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-gray-400 text-sm mb-2">Amount</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-4 text-white text-2xl font-bold focus:outline-none focus:border-purple-500"
+                />
+                <button
+                  onClick={() => setAmount(usdcBalance)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg"
+                >
+                  MAX
+                </button>
+              </div>
+              <p className="text-gray-500 text-sm mt-2">
+                Available: {parseFloat(usdcBalance).toFixed(2)} USDC
+              </p>
+            </div>
+
+            <div className="bg-blue-900/30 border border-blue-500/30 rounded-xl p-4 mb-6">
+              <p className="text-blue-300 text-sm">
+                ✨ Your deposit will earn yield while automatically funding education. 
+                Currently at 20% donation rate - growing with every impact verified!
+              </p>
+            </div>
+
+            <button
+              onClick={handleApprove}
+              disabled={!amount || parseFloat(amount) <= 0 || parseFloat(amount) > parseFloat(usdcBalance)}
+              className="w-full px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 disabled:from-gray-600 disabled:to-gray-700 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg transform hover:scale-105 transition-all duration-200"
+            >
+              1. Approve USDC
+            </button>
+          </>
+        )}
+
+        {step === 'approving' && (
+          <div className="text-center py-8">
+            <div className="animate-spin text-6xl mb-4">⚡</div>
+            <h3 className="text-2xl font-bold text-white mb-2">Approving...</h3>
+            <p className="text-gray-400">Confirm the transaction in your wallet</p>
+            {isSuccess && (
+              <button
+                onClick={handleDeposit}
+                className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white font-bold rounded-xl"
+              >
+                2. Confirm Deposit
+              </button>
+            )}
+          </div>
+        )}
+
+        {step === 'depositing' && (
+          <div className="text-center py-8">
+            <div className="animate-bounce text-6xl mb-4">🚀</div>
+            <h3 className="text-2xl font-bold text-white mb-2">Depositing...</h3>
+            <p className="text-gray-400">Your impact is being recorded!</p>
+          </div>
+        )}
+
+        {step === 'success' && (
+          <div className="text-center py-8">
+            <div className="text-6xl mb-4">🎉</div>
+            <h3 className="text-2xl font-bold text-white mb-2">Success!</h3>
+            <p className="text-gray-400 mb-6">You're now funding education!</p>
+            <button
+              onClick={onClose}
+              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white font-bold rounded-xl"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: app/dashboard/components/Header.js
+================================================================================
+'use client';
+import { Bell, LogOut } from 'lucide-react';
+import Link from 'next/link';
+import { useState } from 'react';
+
+const Header = () => {
+  // We'll mock the connected state for the MVP
+  const [isConnected, setIsConnected] = useState(false);
+
+  return (
+    <header className="flex flex-wrap gap-4 justify-between items-center max-w-7xl mx-auto">
+      <Link href="/" legacyBehavior>
+        <a className="text-3xl font-bold">Scorla</a>
+      </Link>
+      <div className="flex items-center space-x-4">
+        <button className="p-2 rounded-full bg-gray-800 hover:bg-gray-700">
+          <Bell className="w-5 h-5" />
+        </button>
+        
+        {/* FUNCTIONALITY FIX: Shows "Connect" or "Disconnect" based on state */}
+        {isConnected ? (
+          <div className="flex items-center space-x-3">
+            <div className="text-sm bg-gray-800 px-4 py-2 rounded-lg border border-gray-700">
+              0x12...aBcd
+            </div>
+            <button 
+              onClick={() => setIsConnected(false)}
+              className="p-2 rounded-full bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white"
+              title="Disconnect Wallet"
+            >
+              <LogOut className="w-5 h-5" />
+            </button>
+          </div>
+        ) : (
+          <button 
+            onClick={() => setIsConnected(true)}
+            className="text-sm font-semibold bg-white text-black py-2 px-6 rounded-lg hover:bg-gray-200 transition-colors duration-300"
+          >
+            Connect Wallet
+          </button>
+        )}
+      </div>
+    </header>
+  );
+};
+export default Header;
+
+
+================================================================================
+FILE: app/dashboard/components/ImpactChart.js
+================================================================================
+const ImpactChart = () => {
+  // DESIGN FIX: Changed bg-gray-900 to a clean border style
+  return (
+    <div className="bg-black border border-gray-800 p-6 rounded-lg">
+      <h3 className="text-lg font-semibold">My Impact</h3>
+      <p className="text-sm text-gray-400 mb-6">Yield Contributed to Education Over Time</p>
+      <div className="w-full h-64 bg-gray-900 rounded-md flex items-center justify-center">
+        <p className="text-gray-500">[Chart Data Visualized Here]</p>
+      </div>
+    </div>
+  );
+};
+export default ImpactChart;
+
+
+================================================================================
+FILE: app/dashboard/components/StatCard.js
+================================================================================
+export default function StatCard({ title, value, icon, subtitle, trend, highlight }) {
+  return (
+    <div className={`
+      relative overflow-hidden rounded-xl p-6 
+      ${highlight 
+        ? 'bg-gradient-to-br from-purple-900/50 to-pink-900/50 border-2 border-purple-500/50' 
+        : 'bg-gray-900/50 border border-gray-700'
+      }
+      backdrop-blur-sm hover:scale-105 transition-transform duration-200 shadow-xl
+    `}>
+      {highlight && (
+        <div className="absolute -top-10 -right-10 w-32 h-32 bg-purple-500/20 rounded-full blur-3xl"></div>
+      )}
+      
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-gray-400 text-sm font-medium">{title}</span>
+          <span className="text-3xl">{icon}</span>
+        </div>
+        
+        <div className="mb-2">
+          <span className={`text-4xl font-bold ${highlight ? 'text-white' : 'text-white'}`}>
+            {value}
+          </span>
+        </div>
+        
+        <div className="flex items-center justify-between">
+          <span className="text-gray-500 text-sm">{subtitle}</span>
+          {trend && (
+            <span className="text-green-400 text-sm font-semibold">
+              {trend}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+================================================================================
+FILE: app/dashboard/components/WithdrawModal.js
+================================================================================
+'use client';
+
+import { useState } from 'react';
+import { useScorlaStrategy } from '@/hooks/useScorlaStrategy';
+
+export default function WithdrawModal({ onClose }) {
+  const [amount, setAmount] = useState('');
+  const [step, setStep] = useState('input');
+  const { strategyShares, withdraw, isPending, isSuccess } = useScorlaStrategy();
+
+  const handleWithdraw = async () => {
+    if (!amount || parseFloat(amount) <= 0) return;
+    setStep('withdrawing');
+    await withdraw(amount);
+  };
+
+  if (isSuccess && step === 'withdrawing') {
+    setStep('success');
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-gradient-to-br from-gray-900 to-black border border-gray-700 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+        {step === 'input' && (
+          <>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold text-white">💸 Withdraw USDC</h2>
+              <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">×</button>
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-gray-400 text-sm mb-2">Amount</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-4 text-white text-2xl font-bold focus:outline-none focus:border-purple-500"
+                />
+                <button
+                  onClick={() => setAmount(strategyShares)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg"
+                >
+                  MAX
+                </button>
+              </div>
+              <p className="text-gray-500 text-sm mt-2">
+                Available: {parseFloat(strategyShares).toFixed(2)} USDC
+              </p>
+            </div>
+
+            <div className="bg-orange-900/30 border border-orange-500/30 rounded-xl p-4 mb-6">
+              <p className="text-orange-300 text-sm">
+                ⚠️ Withdrawing will remove your funds from the education impact pool.
+              </p>
+            </div>
+
+            <button
+              onClick={handleWithdraw}
+              disabled={!amount || parseFloat(amount) <= 0 || parseFloat(amount) > parseFloat(strategyShares) || isPending}
+              className="w-full px-6 py-4 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 disabled:from-gray-600 disabled:to-gray-700 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg transform hover:scale-105 transition-all duration-200"
+            >
+              {isPending ? 'Processing...' : 'Withdraw USDC'}
+            </button>
+          </>
+        )}
+
+        {step === 'withdrawing' && (
+          <div className="text-center py-8">
+            <div className="animate-spin text-6xl mb-4">⏳</div>
+            <h3 className="text-2xl font-bold text-white mb-2">Withdrawing...</h3>
+            <p className="text-gray-400">Confirm the transaction in your wallet</p>
+          </div>
+        )}
+
+        {step === 'success' && (
+          <div className="text-center py-8">
+            <div className="text-6xl mb-4">✅</div>
+            <h3 className="text-2xl font-bold text-white mb-2">Withdrawn!</h3>
+            <p className="text-gray-400 mb-6">Your USDC has been returned</p>
+            <button
+              onClick={onClose}
+              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white font-bold rounded-xl"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
